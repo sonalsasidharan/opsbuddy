@@ -1,4 +1,4 @@
-# OpsBuddy
+# Devops-Konnekt
 
 A Streamlit dashboard that explains failing Kubernetes pods to stakeholders, developers and DevOps.
 
@@ -6,7 +6,7 @@ A Streamlit dashboard that explains failing Kubernetes pods to stakeholders, dev
 - Click a pod to see what went wrong, the error log lines, warning events, and which commit probably caused it (looked up on GitHub from the image tag).
 - **Search logs**: keyword, regex, level and time-window search straight from Kubernetes. No LLM involved.
 - **Analyze with Claude**: a root-cause analysis and a follow-up chat. You preview exactly what will be sent and approve it first.
-- **Ask OpsBuddy** tab: quick questions about pod status, logs, events and commits. It never sends data to Claude.
+- **Ask Devops-Konnekt** tab: quick questions about pod status, logs, events and commits. It never sends data to Claude.
 
 Everything below was run on **Windows 11 with Docker Desktop and a local kind cluster**. macOS and Linux steps are given where they differ, but those were not tested.
 
@@ -118,7 +118,7 @@ After a minute `payment-service` shows `Error` or `CrashLoopBackOff`, and `promo
 
 ### Step 4b. Make the payment pod's image pullable (needed once)
 
-The payment pod uses the image `localhost:5001/payment-service:7fd1a60`. The tag is a commit SHA, which is how OpsBuddy finds the commit. kind nodes can't pull from your machine's `localhost`, so we run a tiny local registry and point the kind node at it. (`kind load docker-image` failed on Docker 29 with a digest error, which is why we use a registry.)
+The payment pod uses the image `localhost:5001/payment-service:7fd1a60`. The tag is a commit SHA, which is how Devops-Konnekt finds the commit. kind nodes can't pull from your machine's `localhost`, so we run a tiny local registry and point the kind node at it. (`kind load docker-image` failed on Docker 29 with a digest error, which is why we use a registry.)
 
 ```powershell
 docker run -d --restart=always -p 127.0.0.1:5001:5000 --network kind --name kind-registry registry:2
@@ -153,7 +153,7 @@ You can skip 4b and still use the app. The payment pod will then show an image-p
 
 ## Step 5. (Recommended) Use a read-only cluster identity
 
-By default the app uses your normal kubeconfig, which on kind is cluster admin. OpsBuddy only reads, so give it a read-only identity. `rbac.yaml` allows get/list on pods, events and namespaces and get on pod logs, and nothing else (no secrets, no exec, no writes).
+By default the app uses your normal kubeconfig, which on kind is cluster admin. Devops-Konnekt only reads, so give it a read-only identity. `rbac.yaml` allows get/list on pods, events and namespaces and get on pod logs, and nothing else (no secrets, no exec, no writes).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\make-readonly-kubeconfig.ps1
@@ -170,7 +170,7 @@ The script is PowerShell. On macOS or Linux you would need to do the same steps 
 
 ## Step 6. Add Claude (the LLM)
 
-OpsBuddy calls Claude in one of two ways, chosen automatically in `llm.py`:
+Devops-Konnekt calls Claude in one of two ways, chosen automatically in `llm.py`:
 
 | Backend | When it is used | Needs |
 |---|---|---|
@@ -181,7 +181,7 @@ If `ANTHROPIC_API_KEY` is set, the API wins. Unset it to use Claude Code.
 
 ### How the Claude Code backend works
 
-OpsBuddy runs the CLI in non-interactive print mode, with the prompt on stdin, in a throwaway temp directory:
+Devops-Konnekt runs the CLI in non-interactive print mode, with the prompt on stdin, in a throwaway temp directory:
 
 ```
 claude -p --tools "" --strict-mcp-config --disable-slash-commands --no-session-persistence --output-format text --system-prompt "<instructions>"
@@ -208,7 +208,7 @@ You should get a short reply. If you get a login prompt or an error, fix that fi
 
 ### What gets sent to Claude
 
-Only when you click **Approve and send** (or send a follow-up). Before that, OpsBuddy shows you the exact text: pod state, the error lines, warning events, and the suspect commit's author and message. Secrets are masked first (`masking.py`: URL passwords, cloud keys, tokens, JWTs, `password=` style values, emails, card numbers, long opaque strings). Masking is a safety net, not a guarantee. **Read the preview.** The data goes to Anthropic through your login, so check your company's policy on sending logs to an LLM before using real production logs.
+Only when you click **Approve and send** (or send a follow-up). Before that, Devops-Konnekt shows you the exact text: pod state, the error lines, warning events, and the suspect commit's author and message. Secrets are masked first (`masking.py`: URL passwords, cloud keys, tokens, JWTs, `password=` style values, emails, card numbers, long opaque strings). Masking is a safety net, not a guarantee. **Read the preview.** The data goes to Anthropic through your login, so check your company's policy on sending logs to an LLM before using real production logs.
 
 ## Step 7. Run the app
 
@@ -227,11 +227,11 @@ Open http://localhost:8501. The server listens on `127.0.0.1` only (set in `.str
 2. Click `payment-service-5c8b`. You should see the cause, the error lines (passwords and tokens shown as `***REDACTED***`), and the commit card.
 3. Under **Search logs**, try a keyword such as `connection`, a level filter, or a time window.
 4. Click **Analyze with Claude**, read the preview, then **Approve and send**. Ask a follow-up in the box underneath.
-5. Open the **Ask OpsBuddy** tab and ask "which pods are failing?".
+5. Open the **Ask Devops-Konnekt** tab and ask "which pods are failing?".
 
 ## Step 8. Point it at your real repos (commit lookup)
 
-The "Who caused it" card needs two things: the image tag ends in a commit SHA (7 to 40 hex characters, for example `myapp:7fd1a60`), and OpsBuddy knows which GitHub repo the pod belongs to. It looks for the repo in this order:
+The "Who caused it" card needs two things: the image tag ends in a commit SHA (7 to 40 hex characters, for example `myapp:7fd1a60`), and Devops-Konnekt knows which GitHub repo the pod belongs to. It looks for the repo in this order:
 
 1. `repos.json` in the project root, a map of pod-name prefix to `owner/repo`.
 2. The `OPSBUDDY_REPOS` environment variable, the same JSON.

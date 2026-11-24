@@ -1,4 +1,4 @@
-# Read-only identity for OpsBuddy. It can list/read pods, their logs, events and
+# Read-only identity for Devops-Konnekt. It can list/read pods, their logs, events and
 # namespaces, and nothing else: no secrets, no exec, no create/update/delete.
 apiVersion: v1
 kind: Namespace

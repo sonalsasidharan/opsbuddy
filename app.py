@@ -10,7 +10,7 @@ import llm
 import masking
 from theme import CSS, esc, inline, mark
 
-st.set_page_config(page_title="OpsBuddy", layout="wide")
+st.set_page_config(page_title="Devops-Konnekt", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
@@ -704,7 +704,7 @@ def render_followup(pod: dict, key: tuple, analysis: dict):
 
 # --- Sidebar: namespace and the pod list with health ---
 with st.sidebar:
-    st.markdown('<div class="nk-name" style="font-size:18px;margin-bottom:14px">OpsBuddy</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nk-name" style="font-size:18px;margin-bottom:14px">Devops-Konnekt</div>', unsafe_allow_html=True)
     namespaces = get_namespaces()
     default_idx = namespaces.index("demo-apps") if "demo-apps" in namespaces else 0
     selected_ns = st.selectbox("Namespace", namespaces, index=default_idx)
@@ -770,7 +770,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_pod, tab_chat = st.tabs(["Pod details", "Ask OpsBuddy"])
+tab_pod, tab_chat = st.tabs(["Pod details", "Ask Devops-Konnekt"])
 
 with tab_pod:
     sel = next((s for s in services if s["pod_name"] == st.session_state.get("selected")), None)
@@ -784,7 +784,7 @@ with tab_chat:
     if "messages" not in st.session_state:
         st.session_state.messages = [{
             "role": "assistant",
-            "content": "Hi, I'm OpsBuddy. Ask about launch readiness, errors, events, who caused a crash, or how to fix it.",
+            "content": "Hi, I'm Devops-Konnekt. Ask about launch readiness, errors, events, who caused a crash, or how to fix it.",
         }]
     cols = st.columns(len(SAMPLE_PROMPTS))
     for col, sp in zip(cols, SAMPLE_PROMPTS):
