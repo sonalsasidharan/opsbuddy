@@ -8,10 +8,12 @@ from kubernetes import client, config
 import gitinfo
 import llm
 import masking
-from theme import CSS, esc, inline, mark
+from theme import CSS, LIGHT_CSS, esc, inline, mark
 
 st.set_page_config(page_title="Devops-Konnekt", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
+if st.session_state.get("light"):
+    st.markdown(LIGHT_CSS, unsafe_allow_html=True)
 
 
 # --- Connect to Kubernetes (~/.kube/config) ---
@@ -113,6 +115,13 @@ def fetch_cluster_state(namespace: str) -> list:
             "healthy": is_healthy,
         })
     return results
+
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def cached_state(namespace: str) -> list:
+    """Pod states for the namespace-grouped list (cached briefly so the list stays quick)."""
+    return fetch_cluster_state(namespace)
 
 
 def _read_logs(pod_name: str, namespace: str) -> str:
@@ -269,6 +278,9 @@ def build_ai_context(pod: dict, namespace: str) -> tuple[str, dict]:
         "Error log lines:",
         logs,
         "",
+        "Last log lines (these include stack trace frames, so file names and line numbers):",
+        "\n".join(_read_logs(pod["pod_name"], namespace).splitlines()[-25:]) or "none",
+        "",
         "Warning events:",
         "\n".join(events) if events else "none",
         "",
@@ -303,10 +315,28 @@ def ai_analysis(pod: dict, namespace: str, context: str) -> dict:
     return result
 
 
+COMPLEX_REPLY = (
+    "That's a detailed question, so I can't answer it here. Please ask the engineering / DevOps team.\n\n"
+    "I can help with basic questions about your services, for example:\n"
+    "- *\"Which of our services are working right now?\"*\n"
+    "- *\"Is anything not working?\"*\n"
+    "- *\"Is the checkout working for customers?\"*\n"
+    "- *\"Did anything have a problem recently?\"*"
+)
+# Technical topics (fixes, causes, logs, events, resources) are handled by the engineers, not in this chat.
+COMPLEX_TOPICS = re.compile(
+    r"\b(fix|suggest|recommend|how do i|how to|resolve|solution|root cause|commit|author|blame|culprit|who|pushed|"
+    r"caused|broke|errors?|logs?|stack|trace|debug|why|events?|warnings?|describe|resources?|cpu|memory|node|restarts?)\b"
+)
+
+
 def generate_reply(user_prompt: str, cluster_state: list, namespace: str) -> str:
     q = user_prompt.lower()
     crashing = [p for p in cluster_state if not p["healthy"]]
     running = [p for p in cluster_state if p["state"] == "Running"]
+
+    if COMPLEX_TOPICS.search(q):
+        return COMPLEX_REPLY
 
     # AI: cause and fix suggestions
     if any(w in q for w in ["fix", "suggest", "recommend", "how do i", "how to", "resolve", "solution", "root cause"]):
@@ -367,9 +397,93 @@ def generate_reply(user_prompt: str, cluster_state: list, namespace: str) -> str
         return (
             f"### Pods in `{namespace}`\n"
             f"- **Total:** `{len(cluster_state)}`\n"
-            f"- **Running and healthy:** `{len(running)}`\n"
-            f"- **Needs attention:** `{len(crashing)}`"
+            f"- ✅ **Running and healthy:** `{len(running)}`\n"
+            f"- ❌ **Needs attention:** `{len(crashing)}`"
         )
+
+    # Business questions in plain language
+    if any(w in q for w in ["recently", "problem", "earlier", "yesterday", "today"]):
+        if not cluster_state:
+            return f"No services are deployed in `{namespace}`."
+        issues = [p for p in cluster_state if not p["healthy"] or p["restarts"] > 0]
+        if not issues:
+            return "### ✅ No problems seen\nAll services are healthy and none have restarted."
+        lines = ["### Services that had a problem\n"]
+        for p in issues:
+            mark_ = "✅" if p["healthy"] else "❌"
+            note = "working now, but it restarted" if p["healthy"] else f"not working now ({p['state']})"
+            lines.append(f"- {mark_} **{p['business_name']}**: {note}, `{p['restarts']}` restarts")
+        lines.append("\n*I only know restart counts since each service started. I don't keep a history of outages.*")
+        return "\n".join(lines)
+
+    if any(w in q for w in ["not working", "anything wrong", "anything broken", "anything down", "any issue", "any problem"]):
+        if not cluster_state:
+            return f"No services are deployed in `{namespace}`."
+        if not crashing:
+            return "### ✅ Everything is working\nAll services are healthy."
+        lines = [f"### ❌ {len(crashing)} service(s) not working\n"]
+        for p in crashing:
+            lines.append(f"- ❌ **{p['business_name']}**: {p['state']}")
+        return "\n".join(lines)
+
+    if "working right now" in q or ("which" in q and "services" in q and "working" in q):
+        if not cluster_state:
+            return f"No services are deployed in `{namespace}`."
+        ok = [p for p in cluster_state if p["healthy"]]
+        if not ok:
+            return "### ❌ None of the services are working right now"
+        lines = [f"### Working right now ({len(ok)} of {len(cluster_state)})\n"]
+        lines.extend(f"- ✅ **{p['business_name']}**" for p in ok)
+        return "\n".join(lines)
+
+    # 3a. Basic pod questions: which pods are not healthy / how long have they been running
+    if any(w in q for w in ["not healthy", "unhealthy", "failing", "not running", "need attention", "broken"]):
+        if not cluster_state:
+            return f"No pods in `{namespace}`."
+        if not crashing:
+            return f"### ✅ All {len(cluster_state)} pods in `{namespace}` are healthy"
+        lines = [f"### Pods that are not healthy in `{namespace}`\n"]
+        for p in crashing:
+            lines.append(f"- ❌ `{p['pod_name']}` ({p['business_name']}): **{p['state']}**, `{p['restarts']}` restarts")
+        return "\n".join(lines)
+
+    if any(w in q for w in ["how long", "running for", "uptime", "age of"]):
+        if not cluster_state:
+            return f"No pods in `{namespace}`."
+        rows = ["| Pod | Running for | Restarts |", "|---|---|---|"]
+        for p in cluster_state:
+            rows.append(f"| {'✅' if p['healthy'] else '❌'} `{p['pod_name']}` | {p['age']} | {p['restarts']} |")
+        return f"### How long each pod has been running in `{namespace}`\n\n" + "\n".join(rows)
+
+    # 3b. Business: is one named service ready for customers?
+    named = next(
+        (p for p in cluster_state
+         if p["pod_name"].split("-")[0] in q or p["business_name"].lower() in q
+         or any(len(w) > 3 and w in q for w in re.findall(r"[a-z]+", p["business_name"].lower()))),
+        None,
+    )
+    if named and any(w in q for w in ["ready", "customer", "working", "down", "available", "live"]):
+        if named["healthy"]:
+            return (
+                f"### ✅ Yes, **{named['business_name']}** is ready for customers\n"
+                f"It is operational and has been running for `{named['age']}` with `{named['restarts']}` restarts. "
+                "No action is needed."
+            )
+        return (
+            f"### ❌ No, **{named['business_name']}** is not ready for customers\n"
+            f"It is **degraded** (`{named['state']}`, `{named['restarts']}` restarts), so customers may see errors or delays. "
+            "Please check with the engineering team for a time estimate."
+        )
+
+    # 3c. Business: status of all services at a glance (a table, not a launch verdict)
+    if "status" in q and "launch" not in q:
+        if not cluster_state:
+            return f"No services are deployed in `{namespace}`."
+        rows = ["| Pod | Service | Status |", "|---|---|---|"]
+        for p in cluster_state:
+            status = "✅ Healthy" if p["healthy"] else f"❌ {p['state']}"
+            rows.append(f"| `{p['pod_name']}` | {p['business_name']} | {status} |")
+        return f"### Status of all pods in `{namespace}`\n\n" + "\n".join(rows)
 
     # 4. Stakeholder / Marketing / General Status Check
     if any(w in q for w in ["launch", "campaign", "marketing", "healthy", "status", "ready", "incident", "pod"]) or re.search(r"\bup\b", q):
@@ -378,33 +492,29 @@ def generate_reply(user_prompt: str, cluster_state: list, namespace: str) -> str
         if not crashing:
             lines = [f"**Everything in `{namespace}` is healthy. You're clear to launch.**\n"]
             for p in cluster_state:
-                lines.append(f"- **{p['business_name']}** (`{p['pod_name']}`): healthy, `{p['restarts']}` restarts")
+                lines.append(f"- ✅ **{p['business_name']}** (`{p['pod_name']}`): operational, `{p['restarts']}` restarts")
             return "\n".join(lines)
         lines = [f"**Hold the launch. {len(crashing)} service(s) need attention.**\n"]
         for p in cluster_state:
-            status_text = "operational" if p["healthy"] else f"degraded ({p['state']}, {p['restarts']} restarts)"
-            lines.append(f"- **{p['business_name']}** (`{p['pod_name']}`): {status_text}")
-        lines.append("\nAsk *\"Show top 10 error lines\"*, *\"Show warning events\"* or *\"Who caused it?\"*.")
+            if p["healthy"]:
+                lines.append(f"- ✅ **{p['business_name']}** (`{p['pod_name']}`): operational")
+            else:
+                lines.append(f"- ❌ **{p['business_name']}** (`{p['pod_name']}`): degraded ({p['state']}, {p['restarts']} restarts)")
+        lines.append("\nPlease check with the engineering team before launching.")
         return "\n".join(lines)
 
-    # 5. Help / Fallback
-    return (
-        "I can help stakeholders, developers and DevOps. Try:\n"
-        "- **Marketing and PMs:** *\"Is everything healthy for our launch?\"*\n"
-        "- **Developers:** *\"Top 10 error lines for payment-service\"*\n"
-        "- **DevOps:** *\"Show warning events and resource limits\"*\n"
-        "- **Everyone:** *\"Who caused the crash?\"*"
-    )
+    # 5. Anything else is treated as too detailed for this chat
+    return COMPLEX_REPLY
 
 
 
 
 # ---------------- UI ----------------
 SAMPLE_PROMPTS = [
-    "Is everything healthy for launch?",
-    "Who caused the crash?",
-    "How do I fix payment-service?",
-    "Show warning events and resource limits",
+    "Which of our services are working right now?",
+    "Is anything not working?",
+    "Is the checkout working for customers?",
+    "Did anything have a problem recently?",
 ]
 
 
@@ -499,73 +609,100 @@ def filter_log_lines(lines, keyword="", use_regex=False, case=False, levels=(), 
     return out, None
 
 
-def render_log_search(pod: dict, namespace: str):
-    st.markdown('<div class="nk-h">Search logs</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="nk-note" style="margin:-4px 0 10px 0">Reads straight from Kubernetes. Nothing is sent to Claude. '
-        'Secrets are masked in what you see.</div>',
-        unsafe_allow_html=True,
-    )
-    pid = pod["pod_name"]
-    c1, c2 = st.columns([3, 2])
-    keyword = c1.text_input("Keyword", key=f"kw-{pid}", placeholder="timeout, user 4821, connection refused")
-    source = c2.selectbox(
-        "Which run", ["Current container", "Before the last restart"],
-        index=1 if pod["restarts"] > 0 and not pod["healthy"] else 0, key=f"src-{pid}",
-    )
-    c3, c4 = st.columns([3, 2])
-    window = c3.selectbox("Time", list(LOG_WINDOWS), index=2, key=f"win-{pid}")
-    levels = c4.multiselect("Level", list(LEVEL_PATTERNS), key=f"lvl-{pid}", placeholder="Any")
-    o1, o2 = st.columns(2)
-    use_regex = o1.checkbox("Regular expression", key=f"rx-{pid}")
-    case = o2.checkbox("Match case", key=f"cs-{pid}")
+_PLAIN_RULES = [
+    (re.compile(r"connection refused.*?([\w.-]+):(\d+)", re.I), lambda m: f"Could not connect to `{m.group(1)}` on port {m.group(2)}. That service may be down or unreachable."),
+    (re.compile(r"could not connect to (?:the )?database", re.I), lambda m: "The program could not connect to its database."),
+    (re.compile(r"modulenotfounderror: no module named '?([\w.]+)'?", re.I), lambda m: f"A code library the program needs (`{m.group(1)}`) is not installed."),
+    (re.compile(r"keyerror: ?'?([^']+)'?", re.I), lambda m: f"The code looked for a value called `{m.group(1)}`, but it does not exist."),
+    (re.compile(r"zerodivisionerror", re.I), lambda m: "The code tried to divide a number by zero."),
+    (re.compile(r"attributeerror: (.*)", re.I), lambda m: f"The code used something that does not exist on an object ({m.group(1)})."),
+    (re.compile(r"typeerror: (.*)", re.I), lambda m: f"The code used a value of the wrong type ({m.group(1)})."),
+    (re.compile(r"valueerror: (.*)", re.I), lambda m: f"The code received a value it could not accept ({m.group(1)})."),
+    (re.compile(r"(?:filenotfound|no such file)", re.I), lambda m: "A file the program needs is missing."),
+    (re.compile(r"permission denied|forbidden|unauthorized", re.I), lambda m: "Access was denied. The program does not have permission."),
+    (re.compile(r"timed? ?out|timeout", re.I), lambda m: "A request took too long and timed out."),
+    (re.compile(r"out of memory|oomkilled|memoryerror", re.I), lambda m: "The program ran out of memory and was stopped."),
+    (re.compile(r"authorization:|bearer |token=|password=", re.I), lambda m: "This line contains a login token or password, which is hidden for safety."),
+    (re.compile(r"traceback", re.I), lambda m: "The program crashed because of an error in its code."),
+    (re.compile(r"\bfatal\b|\bpanic\b|exception", re.I), lambda m: "The program hit an unexpected error and stopped."),
+]
 
-    start = end = None
-    since = LOG_WINDOWS[window]
-    if since == "custom":
-        now = datetime.now(timezone.utc)
-        d1, t1, d2, t2 = st.columns(4)
-        fd = d1.date_input("From date", value=now.date(), key=f"fd-{pid}")
-        ft = t1.time_input("From time", value=(now.replace(hour=0, minute=0)).time(), key=f"ft-{pid}")
-        td = d2.date_input("To date", value=now.date(), key=f"td-{pid}")
-        tt = t2.time_input("To time", value=now.time().replace(second=0, microsecond=0), key=f"tt-{pid}")
-        start = datetime.combine(fd, ft, tzinfo=timezone.utc)
-        end = datetime.combine(td, tt, tzinfo=timezone.utc).replace(second=59)
-        if end < start:
-            st.warning("The end of the range is before the start.")
-            return
-        since = max(60, int((now - start).total_seconds()) + 1)  # let the API trim the start side
 
-    prev = source != "Current container"
-    res = fetch_log_lines(pid, namespace, prev, since)
-    if prev and not res.get("lines"):
-        # Kubernetes often can't return the previous run's logs for a pod that is crash-looping.
-        st.caption("Kubernetes has no logs for the previous run right now, so this shows the current container.")
-        res = fetch_log_lines(pid, namespace, False, since)
-    if "error" in res:
-        st.info(res["error"])
-        return
-    total = len(res["lines"])
-    matches, err = filter_log_lines(res["lines"], keyword.strip(), use_regex, case, levels, start, end)
-    if err:
-        st.warning(err)
-        return
-    if not total:
-        st.info("No log lines in this window. Try a longer time range, or the other run.")
-        return
-    shown = matches[-LOG_VIEW_CAP:]
-    note = f"{len(matches)} of {total} lines match."
-    if len(matches) > LOG_VIEW_CAP:
-        note += f" Showing the latest {LOG_VIEW_CAP}; download for all of them."
-    if total >= 5000:
-        note += " Only the latest 5,000 lines are read, so older lines may be missing."
-    st.caption(note + " Times are UTC.")
-    if matches:
-        masked = masking.mask_text("\n".join(matches))
-        st.code(masking.mask_text("\n".join(shown)), language="text")
-        st.download_button("Download matches", masked, file_name=f"{pid}-logs.txt", key=f"dl-{pid}")
-    else:
-        st.info("Nothing matches those filters.")
+def plain_english_errors(logs: str, state: str) -> list:
+    """Rule-based, local translation of the error log lines. Nothing is sent anywhere."""
+    if logs.startswith("No logs yet"):
+        return [explain_root_cause("", state)[0]]
+    out = []
+    for line in logs.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        for pat, fn in _PLAIN_RULES:
+            m = pat.search(line)
+            if m:
+                msg = fn(m)
+                break
+        else:
+            msg = f"The program reported: `{line[:140]}`"
+        if msg not in out:
+            out.append(msg)
+    return out or [explain_root_cause(logs, state)[0]]
+
+
+SYSTEM_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease", "local-path-storage"}
+
+
+def is_system_namespace(ns: str) -> bool:
+    """Namespaces Kubernetes (and kind) create for themselves, not your own apps."""
+    return ns in SYSTEM_NAMESPACES or ns.startswith("kube-")
+
+
+def search_logs_by_id(pods: list, namespace: str, needle: str, per_pod: int = 30) -> tuple[list, int]:
+    """Find log lines containing `needle` (for example a correlation ID) in every pod of the namespace.
+    Reads the last 2000 lines of the current and the previous container. Returns ([(pod, [lines])], pods_searched)."""
+    needle_l = needle.lower()
+    hits = []
+    for p in pods:
+        lines = []
+        for previous in (False, True):
+            try:
+                raw = v1.read_namespaced_pod_log(p["pod_name"], namespace, previous=previous, tail_lines=2000)
+            except Exception:
+                continue
+            for ln in (raw or "").splitlines():
+                if needle_l in ln.lower() and ln not in lines:
+                    lines.append(ln)
+        if lines:
+            hits.append((p, masking.mask_text("\n".join(lines[-per_pod:])).splitlines()))
+    return hits, len(pods)
+
+
+def render_correlation_search(pods: list, namespace: str, key: str = "list"):
+    """pods: every pod in the namespace (main page) or just the open pod (pod details)."""
+    where = f"the pod <b>{esc(pods[0]['pod_name'])}</b>" if len(pods) == 1 else f"every pod in <b>{esc(namespace)}</b>"
+    with st.container(key=f"corrbox-{key}"):
+        st.markdown('<div class="nk-corr-h">Search by correlation ID</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="nk-note" style="margin:-2px 0 8px 0">Looks through the recent logs of {where}. '
+            'Read straight from Kubernetes; nothing is sent to Claude. Secrets are masked.</div>',
+            unsafe_allow_html=True,
+        )
+        with st.form(f"corr-form-{key}", border=False):
+            c1, c2 = st.columns([5, 1])
+            cid = c1.text_input("Correlation ID", placeholder="Paste a correlation ID, for example 3f2a9c1d-...", label_visibility="collapsed")
+            go = c2.form_submit_button("Search", use_container_width=True)
+        if go:
+            cid = cid.strip()
+            if len(cid) < 4:
+                st.warning("Enter at least 4 characters.")
+            else:
+                with st.spinner("Searching logs..."):
+                    hits, searched = search_logs_by_id(pods, namespace, cid)
+                if not hits:
+                    st.info(f"No log lines containing that ID in {searched} pod(s). Only the last 2000 lines of each pod are searched.")
+                for p, lines in hits:
+                    st.markdown(f"**{esc(p['business_name'])}** (`{esc(p['pod_name'])}`): {len(lines)} line(s)")
+                    st.code("\n".join(lines), language="text")
 
 
 def render_pod(pod: dict, namespace: str):
@@ -592,22 +729,12 @@ def render_pod(pod: dict, namespace: str):
             f'{esc(pod["business_name"])} is running normally with {pod["restarts"]} restarts.</div></div>',
             unsafe_allow_html=True,
         )
-        render_log_search(pod, namespace)
+        render_correlation_search([pod], namespace, key="pod")
         return
 
     logs = get_top_errors(pod["pod_name"], namespace, lines=10)
     summary, hint = explain_root_cause(logs, pod["state"])
     ci = commit_for_pod(pod)
-
-    st.markdown('<div class="nk-h">What went wrong</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="nk-card"><div class="nk-line" style="margin-top:0">{inline(summary)}</div>'
-        f'<div class="nk-line"><span class="nk-k">What to check.</span> {inline(hint)}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="nk-h">Who caused it</div>', unsafe_allow_html=True)
-    st.markdown(commit_card(ci), unsafe_allow_html=True)
 
     st.markdown('<div class="nk-h">Error log lines</div>', unsafe_allow_html=True)
     st.code(logs, language="text")
@@ -616,47 +743,60 @@ def render_pod(pod: dict, namespace: str):
         with st.expander("Kubernetes warning events"):
             st.markdown("\n".join(ev))
 
-    render_log_search(pod, namespace)
-
-    st.markdown('<div class="nk-h">Claude’s take</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nk-h">What went wrong</div>', unsafe_allow_html=True)
+    items = "".join(f"<li>{inline(m)}</li>" for m in plain_english_errors(logs, pod["state"]))
     st.markdown(
-        '<div class="nk-note" style="margin:-4px 0 10px 0">Sends this pod’s state, the error lines above (secrets masked), '
-        'warning events and the suspect commit’s author and message to Claude. You see exactly what will be sent and approve it first.</div>',
+        f'<div class="nk-card"><div class="nk-line" style="margin-top:0"><ul style="margin:0;padding-left:20px">{items}</ul></div></div>',
         unsafe_allow_html=True,
     )
-    cache_key = ai_key(pod, namespace)
-    have = cached_analysis(pod, namespace)
-    label = "Analyze again" if have else "Analyze with Claude"
-    if st.button(label, key=f"ai-{pod['pod_name']}", type="primary"):
-        st.session_state["preview_for"] = cache_key
-    result = have
-    if st.session_state.get("preview_for") == cache_key:
-        ctx, report = build_ai_context(pod, namespace)
-        with st.container(border=True):
-            st.markdown("**This is exactly what will be sent to Claude**")
-            if report:
-                found = ", ".join(f"{n} {k}" for k, n in report.items())
-                st.caption(f"Masked before showing you: {found}.")
-            else:
-                st.caption("Nothing needed masking. Read it anyway: masking can miss secrets in formats it doesn't know.")
-            st.code(ctx, language="text")
-            a, b = st.columns(2)
-            go = a.button("Approve and send", key=f"go-{pod['pod_name']}", type="primary", use_container_width=True)
-            cancel = b.button("Cancel", key=f"cancel-{pod['pod_name']}", use_container_width=True)
-        if cancel:
-            st.session_state.pop("preview_for", None)
-            st.rerun()
-        if go:
-            st.session_state.pop("preview_for", None)
-            result = ai_analysis(pod, namespace, ctx)
-    if result:
-        if "error" in result:
-            st.error(result["error"])
-        else:
+
+    st.markdown('<div class="nk-h">Who caused it</div>', unsafe_allow_html=True)
+    st.markdown(commit_card(ci), unsafe_allow_html=True)
+
+    render_correlation_search([pod], namespace, key="pod")
+
+    with st.container(key="claudebox"):
+        st.markdown('<div class="nk-claude-h"><span>✦</span> Claude’s take</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="nk-note" style="margin:-4px 0 10px 0">Sends this pod’s state, the error lines above (secrets masked), '
+            'warning events and the suspect commit’s author and message to Claude. You see exactly what will be sent and approve it first.</div>',
+            unsafe_allow_html=True,
+        )
+        cache_key = ai_key(pod, namespace)
+        have = cached_analysis(pod, namespace)
+        label = "Analyze again" if have else "Analyze with Claude"
+        if st.button(label, key=f"ai-{pod['pod_name']}", type="primary"):
+            st.session_state["preview_for"] = cache_key
+        result = have
+        if st.session_state.get("preview_for") == cache_key:
+            ctx, report = build_ai_context(pod, namespace)
             with st.container(border=True):
-                st.markdown(result["text"])
-                st.caption(f"Written by {result['model']}. Verify before changing production.")
-            render_followup(pod, cache_key, result)
+                st.markdown("**This is exactly what will be sent to Claude**")
+                if report:
+                    found = ", ".join(f"{n} {k}" for k, n in report.items())
+                    st.caption(f"Masked before showing you: {found}.")
+                else:
+                    st.caption("Nothing needed masking. Read it anyway: masking can miss secrets in formats it doesn't know.")
+                st.code(ctx, language="text")
+                a, b = st.columns(2)
+                go = a.button("Approve and send", key=f"go-{pod['pod_name']}", type="primary", use_container_width=True)
+                cancel = b.button("Cancel", key=f"cancel-{pod['pod_name']}", use_container_width=True)
+            if cancel:
+                st.session_state.pop("preview_for", None)
+                st.rerun()
+            if go:
+                st.session_state.pop("preview_for", None)
+                result = ai_analysis(pod, namespace, ctx)
+        if result:
+            if "error" in result:
+                st.error(result["error"])
+            else:
+                with st.container(border=True):
+                    st.markdown(result["text"])
+                    st.caption(f"Written by {result['model']}. Verify before changing production.")
+            with st.expander("Copy this answer as text"):
+                st.code(result["text"], language="markdown")
+                render_followup(pod, cache_key, result)
 
 
 FOLLOWUP_CHIPS = [
@@ -703,44 +843,100 @@ def render_followup(pod: dict, key: tuple, analysis: dict):
 
 
 # --- Sidebar: namespace and the pod list with health ---
+def current_cluster() -> str:
+    """Name of the kube context the app is connected to (same kubeconfig the app loaded)."""
+    try:
+        _, active = config.list_kube_config_contexts(config_file=os.environ.get("OPSBUDDY_KUBECONFIG") or None)
+        return active.get("name") or "unknown"
+    except Exception:
+        return "unknown"
+
+
+namespaces = get_namespaces()
+if st.session_state.get("ns") not in namespaces:
+    st.session_state["ns"] = "demo-apps" if "demo-apps" in namespaces else namespaces[0]
+selected_ns = st.session_state["ns"]  # changes when a pod in another namespace is opened
+services = fetch_cluster_state(selected_ns)
+names = [s["pod_name"] for s in services]
+if st.session_state.get("selected") not in names:
+    st.session_state["selected"] = None  # nothing is opened until the user clicks a pod
+
 with st.sidebar:
-    st.markdown('<div class="nk-name" style="font-size:18px;margin-bottom:14px">Devops-Konnekt</div>', unsafe_allow_html=True)
-    namespaces = get_namespaces()
-    default_idx = namespaces.index("demo-apps") if "demo-apps" in namespaces else 0
-    selected_ns = st.selectbox("Namespace", namespaces, index=default_idx)
-    if st.button("Refresh", use_container_width=True):
-        st.rerun()
-
-    services = fetch_cluster_state(selected_ns)
-    names = [s["pod_name"] for s in services]
-    if st.session_state.get("selected") not in names:
-        failing = [s["pod_name"] for s in services if not s["healthy"]]
-        st.session_state["selected"] = (failing or names or [None])[0]
-
-    st.markdown('<div class="nk-h" style="font-size:15px">Pods</div>', unsafe_allow_html=True)
-    if not services:
-        st.caption(f"No pods in {selected_ns}.")
-    for s in services:
-        dot = ":green[●]" if s["healthy"] else ":red[●]"
-        is_sel = s["pod_name"] == st.session_state["selected"]
-        if st.button(
-            f"{dot}  {s['business_name']} ({s['state']})",
-            key=f"pod-{s['pod_name']}",
-            type="primary" if is_sel else "secondary",
-            use_container_width=True,
-        ):
-            st.session_state["selected"] = s["pod_name"]
-            st.rerun()
-
-    notes = [
-        "GitHub token set." if gitinfo.has_token() else "No GitHub token: public repos only, 60 lookups an hour.",
-        {"api": "Claude: using your API key.", "claude-code": "Claude: using your Claude Code login, no API key needed.",
-         None: "Claude analysis is off: install Claude Code or set ANTHROPIC_API_KEY."}[llm.backend()],
-    ]
+    bad_n = sum(1 for s in services if not s["healthy"])
+    good_n = len(services) - bad_n
+    pct = round(100 * good_n / len(services)) if services else 0
+    bar_color = "var(--green)" if bad_n == 0 else "var(--champagne)" if good_n else "var(--red)"
     st.markdown(
-        '<div class="nk-note" style="margin-top:22px">' + "<br>".join(esc(n) for n in notes) + "</div>",
+        f'<div class="nk-brand">{mark("warn" if bad_n else "ok", 44)}<div class="nk-brand-t">Devops-Konnekt</div></div>'
+        '<div class="nk-sc nk-sc-t">'
+        '<div class="nk-sc-l">Cluster</div>'
+        f'<div class="nk-sc-v">{esc(current_cluster())}</div>'
+        '<div class="nk-sc-conn"><span class="dot ok"></span>Connected</div>'
+        '</div>'
+        '<div class="nk-sc nk-sc-s">'
+        '<div class="nk-sc-l">Namespace</div>'
+        f'<div class="nk-chip">{esc(selected_ns)}</div>'
+        '</div>'
+        '<div class="nk-sc nk-sc-p">'
+        '<div class="nk-sc-l">Overall health</div>'
+        f'<div class="nk-big">{good_n}<span> of {len(services)} healthy</span></div>'
+        f'<div class="nk-bar"><i style="width:{pct}%;background:{bar_color}"></i></div>'
+        f'<div class="nk-sc-row"><span><span class="dot ok"></span>Healthy</span><b>{good_n}</b></div>'
+        f'<div class="nk-sc-row"><span><span class="dot bad"></span>Need attention</span><b>{bad_n}</b></div>'
+        '</div>'
+        '<div class="nk-sc nk-sc-o">'
+        '<div class="nk-sc-l">How to use</div>'
+        '<div class="nk-step"><b>1</b><span>Pick your role on the main page.</span></div>'
+        '<div class="nk-step"><b>2</b><span>Developers / DevOps: open a pod to see its errors and who caused it.</span></div>'
+        '<div class="nk-step"><b>3</b><span>Business team: ask a question in the chat.</span></div>'
+        '</div>',
         unsafe_allow_html=True,
     )
+    st.toggle("Light theme", key="light")
+
+# Landing choice. The chat input only pins to the bottom of the page when it is called at the
+# top level (not inside a tab), so the two audiences are separate views, not st.tabs.
+audience = st.query_params.get("role")
+if audience not in ("dev", "business"):
+    audience = None
+
+ROLES = [
+    ("dev", "dev", "Developers / DevOps", "01",
+     ["Open a pod from the Pods by namespace list.",
+      "Read the errors, the cause and who caused it.",
+      "Use Claude’s take for a suggested fix."],
+     '''<div class="nk-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></div>'''),
+    ("business", "biz", "Business team", "02",
+     ["Click a suggested question, or type your own.",
+      "Read the answer: ✅ is working, ❌ needs attention.",
+      "For detailed questions, ask the engineering team."],
+     '''<div class="nk-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></div>'''),
+]
+if audience is None:
+    st.markdown('<div class="nk-hero-s">Who are you?</div>', unsafe_allow_html=True)
+# Before a choice both boxes show; after a click only the chosen box stays, plus a "Change role" button.
+# Each box is a link: clicking anywhere on it opens that view (?role=...).
+shown = ROLES if audience is None else []  # once a role is chosen, the boxes are hidden; only "Change role" stays
+for col, (key, cls, title, num, desc, ico) in zip(st.columns(2), shown):
+    sel_cls = " sel" if audience == key else ""
+    compact = " compact" if audience else ""
+    with col:
+        st.markdown(
+            f'<div class="nk-role {cls}{sel_cls}{compact}">'
+            f'<a class="nk-cover" href="?role={key}" target="_self" aria-label="Open {esc(title)}"></a>'
+            f'<div class="nk-rhead">{ico}<div class="nk-role-t">{title}</div><div class="nk-num2">{num}</div></div>'
+            '<div class="nk-role-steps"><div class="nk-howto">How to use</div>'
+            + "".join(f'<div class="nk-rstep"><b>{k}</b><span>{esc(line)}</span></div>' for k, line in enumerate(desc, 1))
+            + '</div></div>',
+            unsafe_allow_html=True,
+        )
+if audience is None:
+    st.stop()
+if st.button("⇄ Change role", key="aud-back"):
+    st.query_params.clear()
+    st.rerun()
+
+view = "Pod details" if audience == "dev" else "Ask Devops-Konnekt"
 
 crashing_pods = [s for s in services if not s["healthy"]]
 healthy_n = len(services) - len(crashing_pods)
@@ -748,13 +944,7 @@ healthy_n = len(services) - len(crashing_pods)
 hour = datetime.now().hour
 greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
 today = datetime.now().strftime("%a, %b %d").replace(" 0", " ")
-if not services:
-    sub = f"Nothing is running in {selected_ns} yet."
-elif crashing_pods:
-    n = len(crashing_pods)
-    sub = f"{n} {'service needs' if n == 1 else 'services need'} you in {selected_ns}."
-else:
-    sub = f"You're up to date. Everything in {selected_ns} is healthy."
+sub = "Check service health, investigate issues and find the cause."
 
 st.markdown(
     f'<div class="nk-top">{mark("warn" if crashing_pods else "ok")}<div class="nk-title">{greeting}</div></div>'
@@ -770,21 +960,67 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_pod, tab_chat = st.tabs(["Pod details", "Ask Devops-Konnekt"])
-
-with tab_pod:
+if view == "Pod details":
     sel = next((s for s in services if s["pod_name"] == st.session_state.get("selected")), None)
     if sel:
+        if st.button("← All pods", key="back-pods"):
+            st.session_state["selected"] = None
+            st.rerun()
         st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
         render_pod(sel, selected_ns)
     else:
-        st.info("Choose a pod from the list on the left.")
+        # Pod list first, grouped by namespace; details only after a click.
+        def open_pod(ns: str, pod: str) -> None:
+            st.session_state["ns"] = ns
+            st.session_state["selected"] = pod
 
-with tab_chat:
+        with st.container(key="podsection", gap="xxsmall"):
+            st.markdown('<div class="nk-h">Pods by namespace</div>', unsafe_allow_html=True)
+            # Read every namespace first, then stack the boxes into three columns, always adding to the
+            # shortest one, so short boxes don't leave empty space under them (like a masonry layout).
+            show_sys = st.toggle("Show system namespaces", key="show_sys")
+            visible = [ns for ns in namespaces if show_sys or not is_system_namespace(ns)]
+            hidden_n = len(namespaces) - len(visible)
+            if hidden_n:
+                st.caption(f"{hidden_n} system namespace(s) hidden.")
+            loaded = []
+            for i, ns in enumerate(visible):
+                try:
+                    loaded.append((i, ns, services if ns == selected_ns else cached_state(ns)))
+                except Exception:
+                    loaded.append((i, ns, None))
+            columns = st.columns(3, gap="xxsmall")
+            heights = [0, 0, 0]
+            for i, ns, ns_pods in loaded:
+                j = heights.index(min(heights))
+                heights[j] += 2 + (len(ns_pods) if ns_pods else 1)
+                tone = "tspo"[i % 4]  # cycle teal / sky / pink / orange boxes
+                with columns[j], st.container(border=False, key=f"nsbox-{tone}-{ns}", gap="xxsmall"):
+                    if ns_pods is None:
+                        st.markdown(f'<div class="nk-name">{esc(ns)}</div>', unsafe_allow_html=True)
+                        st.caption("Could not read pods in this namespace.")
+                        continue
+                    st.markdown(
+                        f'<div class="nk-name" style="font-size:15px">{esc(ns)} <span class="nk-k">({len(ns_pods)})</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if not ns_pods:
+                        st.caption("No pods.")
+                    for p in ns_pods:
+                        dot = ":green[●]" if p["healthy"] else ":red[●]"
+                        st.button(
+                            f"•  {p['pod_name']}  {dot} {p['state']}",
+                            key=f"main-pod-{ns}-{p['pod_name']}",
+                            type="tertiary",
+                            on_click=open_pod,
+                            args=(ns, p["pod_name"]),
+                        )
+            st.caption("Click a pod to see its details.")
+else:
     if "messages" not in st.session_state:
         st.session_state.messages = [{
             "role": "assistant",
-            "content": "Hi, I'm Devops-Konnekt. Ask about launch readiness, errors, events, who caused a crash, or how to fix it.",
+            "content": "Hi, I'm Devops-Konnekt. Ask me simple questions about your services: what is working, what is not, and whether anything had a problem.",
         }]
     cols = st.columns(len(SAMPLE_PROMPTS))
     for col, sp in zip(cols, SAMPLE_PROMPTS):
@@ -795,7 +1031,7 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("Ask about launch status, errors, events, who caused a crash, or how to fix it") or st.session_state.pop("pending", None)
+    prompt = st.chat_input("Ask about your services: what is working, what is not, whether anything had a problem") or st.session_state.pop("pending", None)
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
