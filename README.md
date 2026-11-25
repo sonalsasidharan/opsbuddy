@@ -9,6 +9,8 @@ When you open it, the first page asks **Who are you?**
 
 The left panel always shows the cluster you are connected to, the current namespace, overall health, a short how-to, and a Light theme switch.
 
+**Step-by-step guide to set up the cluster, recreate the demo pods and run the app locally: [docs/SETUP.md](docs/SETUP.md).**
+
 ---
 
 ## Quick start (Linux or macOS)
