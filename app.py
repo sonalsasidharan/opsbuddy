@@ -19,8 +19,8 @@ if st.session_state.get("light"):
 # --- Connect to Kubernetes (~/.kube/config) ---
 @st.cache_resource
 def get_k8s_clients():
-    # Point OPSBUDDY_KUBECONFIG at a read-only kubeconfig (see rbac.yaml) instead of your admin one.
-    config.load_kube_config(config_file=os.environ.get("OPSBUDDY_KUBECONFIG") or None)
+    # Point DEVOPS_KONNEKT_KUBECONFIG at a read-only kubeconfig (see rbac.yaml) instead of your admin one.
+    config.load_kube_config(config_file=os.environ.get("DEVOPS_KONNEKT_KUBECONFIG") or None)
     return client.CoreV1Api(), client.AppsV1Api()
 
 
@@ -846,7 +846,7 @@ def render_followup(pod: dict, key: tuple, analysis: dict):
 def current_cluster() -> str:
     """Name of the kube context the app is connected to (same kubeconfig the app loaded)."""
     try:
-        _, active = config.list_kube_config_contexts(config_file=os.environ.get("OPSBUDDY_KUBECONFIG") or None)
+        _, active = config.list_kube_config_contexts(config_file=os.environ.get("DEVOPS_KONNEKT_KUBECONFIG") or None)
         return active.get("name") or "unknown"
     except Exception:
         return "unknown"

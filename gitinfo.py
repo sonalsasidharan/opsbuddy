@@ -3,7 +3,7 @@
 Pod -> commit link: the image tag must end in a commit SHA, e.g.
 `payment-service:3f2a9c1` or `ghcr.io/acme/payments:release-3f2a9c1d4e...`.
 Pod -> repo link: `repos.json` (service prefix -> "owner/repo"), the
-OPSBUDDY_REPOS env var (same JSON), or, failing both, an image path like
+DEVOPS_KONNEKT_REPOS env var (same JSON), or, failing both, an image path like
 `ghcr.io/owner/repo`.
 Set GITHUB_TOKEN for private repos and higher rate limits.
 """
@@ -45,7 +45,7 @@ def load_repo_map() -> dict:
             repo_map.update(json.loads(path.read_text(encoding="utf-8-sig")))
         except (OSError, ValueError):
             pass
-    env = os.environ.get("OPSBUDDY_REPOS")
+    env = os.environ.get("DEVOPS_KONNEKT_REPOS")
     if env:
         try:
             repo_map.update(json.loads(env))
@@ -70,7 +70,7 @@ def has_token() -> bool:
 
 
 def _get(path: str, params: dict | None = None):
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "opsbuddy"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "devops-konnekt"}
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
