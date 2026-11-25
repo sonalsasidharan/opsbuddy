@@ -1,4 +1,4 @@
-"""Konnekt Noir styling for OpsBuddy (dark primary)."""
+"""Konnekt Noir styling for Devops-Konnekt (dark primary)."""
 import html
 import re
 
@@ -86,7 +86,7 @@ h1,h2,h3 {{ font-weight:600; letter-spacing:-0.02em; }}
 
 
 def mark(state: str = "warn", size: int = 34) -> str:
-    """The OpsBuddy mark: a connector arc and a dot. state: warn | ok | work."""
+    """The Devops-Konnekt mark: a connector arc and a dot. state: warn | ok | work."""
     return (
         f'<svg class="nk-mark {state}" width="{size}" height="{size}" viewBox="0 0 34 34" aria-hidden="true">'
         '<path class="arc" d="M5 24 C 8 10, 22 6, 28 12"/>'

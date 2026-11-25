@@ -17,5 +17,5 @@ kubectl --kubeconfig $Out config unset "users.$adminUser" | Out-Null   # drop th
 
 # Only the current user may read the file.
 icacls $Out /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
-Write-Host "Wrote $Out (expires in $Duration). Start OpsBuddy with:"
+Write-Host "Wrote $Out (expires in $Duration). Start Devops-Konnekt with:"
 Write-Host "  `$env:OPSBUDDY_KUBECONFIG = '$Out'"

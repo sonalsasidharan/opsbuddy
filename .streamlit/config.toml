@@ -8,5 +8,5 @@ font = "sans serif"
 
 [server]
 headless = true
-# Only this machine can open OpsBuddy. The app has no login, so don't expose it on the network.
+# Only this machine can open Devops-Konnekt. The app has no login, so don't expose it on the network.
 address = "127.0.0.1"
