@@ -1,0 +1,39 @@
+# Runs in the demo-apps namespace (created by ../sample-pods.yaml), so it shows up in Devops-Konnekt.
+# The image comes from the local registry on localhost:5001 (see ../docs/SETUP.md, step 4).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dummy-ui
+  namespace: demo-apps
+  labels:
+    app: dummy-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dummy-ui
+  template:
+    metadata:
+      labels:
+        app: dummy-ui
+    spec:
+      containers:
+        - name: dummy-ui
+          image: localhost:5001/dummy-ui:latest
+          imagePullPolicy: Always        # so a rebuilt and pushed image is pulled again on restart
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dummy-ui
+  namespace: demo-apps
+spec:
+  selector:
+    app: dummy-ui
+  ports:
+    - port: 8080
+      targetPort: 8080
