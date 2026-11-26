@@ -1,8 +1,8 @@
 """Dummy UI app for trying Devops-Konnekt. Standard library only.
 
 Listens on port 8080 (override with the PORT environment variable) and logs every request with a correlation ID
-(taken from the X-Correlation-ID header, or generated), so you can try the
-"Search by correlation ID" box in Devops-Konnekt.
+(taken from the X-Correlation-ID header, or generated), so the requests are easy to follow
+in the pod's Live logs in Devops-Konnekt.
 
   /        the page
   /health  returns ok

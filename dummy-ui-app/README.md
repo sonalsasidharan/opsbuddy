@@ -35,7 +35,7 @@ The app listens on port 8080 inside the pod. Forward it to a free port on your m
 kubectl --context kind-devops-konnekt port-forward deployment/dummy-ui 8081:8080 -n demo-apps
 ```
 
-Open http://localhost:8081. Click the links, and use **Trigger an error** (`/error`) to write an ERROR line to the logs. In Devops-Konnekt, open the `dummy-ui` pod and search a correlation ID (shown in `kubectl logs`).
+Open http://localhost:8081. Click the links, and use **Trigger an error** (`/error`) to write an ERROR line to the logs. In Devops-Konnekt, open the `dummy-ui` pod and watch **Live logs**.
 
 ```bash
 kubectl --context kind-devops-konnekt logs deployment/dummy-ui -n demo-apps

@@ -4,7 +4,7 @@ A Streamlit dashboard that explains failing Kubernetes pods to developers, DevOp
 
 When you open it, the first page asks **Who are you?**
 
-- **Developers / DevOps**: every pod, grouped by namespace. Click a pod to see the error log lines, a plain-English "What went wrong", **Who caused it** (the commit behind the running image, looked up on GitHub), a **Search by correlation ID** box, and **Claude's take** (a root-cause analysis and a follow-up chat). You preview exactly what will be sent to Claude and approve it first.
+- **Developers / DevOps**: every pod, grouped by namespace. Click a pod to see the error log lines, a plain-English "What went wrong", **Who caused it** (the commit behind the running image, looked up on GitHub), **Live logs** (all recent lines, refreshed every 3 seconds), and **Claude's take** (a root-cause analysis and a follow-up chat). You preview exactly what will be sent to Claude and approve it first.
 - **Business team**: a simple chat with four suggested questions about which services are working. Detailed or technical questions get a default message pointing the person to the engineering team. This chat never sends data to Claude.
 
 The left panel always shows the cluster you are connected to, the current namespace, overall health, a short how-to, and a Light theme switch.
@@ -134,7 +134,7 @@ The cluster is `devops-konnekt`, its kubectl context is `kind-devops-konnekt`, a
 |---|---|
 | `healthy-api-7d9f` | nginx, stays healthy |
 | `payment-service-5c8b` | crash-loops with a database connection error and fake secrets (to test masking) |
-| `orders-service-4e2a` | a Python code bug (`KeyError`) that crash-loops. Its logs hold a correlation ID, `3f2a9c1d-0003`, and a made-up committer line. |
+| `orders-service-4e2a` | a Python code bug (`KeyError`) that crash-loops. Its logs hold an ERROR line and a made-up committer line. |
 | `promo-service-3a1d` | `ImagePullBackOff` (bad image) |
 
 After a minute the failing pods show `CrashLoopBackOff` or `ImagePullBackOff`. That is the point of the demo. `orders-service-4e2a` needs internet access to pull `python:3.12-alpine`.
@@ -254,8 +254,8 @@ Open http://localhost:8501. The server listens on `127.0.0.1` only (set in `.str
 1. On the first page, click **Developers / DevOps** or **Business team**. Use **⇄ Change role** to switch.
 2. **Developers / DevOps:**
    - The pods are listed in boxes by namespace. System namespaces (`kube-system` and similar) are hidden. Turn on **Show system namespaces** to see them.
-   - Click a pod. A failing pod shows, in order: **Error log lines**, **What went wrong** (the error lines in plain English), **Who caused it**, **Search by correlation ID**, and **Claude's take**.
-   - **Search by correlation ID** searches that pod's recent logs (the last 2000 lines of the current and previous container) for an ID you paste. Try `3f2a9c1d-0003` on `orders-service-4e2a`.
+   - Click a pod. A failing pod shows, in order: **Error log lines**, **Live logs**, **What went wrong** (the error lines in plain English), **Who caused it**, and **Claude's take**.
+   - **Live logs** shows the pod's last 100 log lines, newest first, and refreshes every 3 seconds. Choose **All lines** or **Errors only**. Switch **Live** off to pause it.
    - **Claude's take**: click **Analyze with Claude**, read the preview, then **Approve and send**. Ask a follow-up below the answer.
 3. **Business team:** click a suggested question or type your own. Answers use ✅ and ❌. Detailed or technical questions get a default message that points to the engineering team. The four suggested questions are:
    - Which of our services are working right now?
@@ -311,7 +311,7 @@ Never commit a token. Results are cached for 5 minutes.
 | "Who caused it" says "no repo" | Add the pod to `repos.json` (step 7). |
 | "Who caused it" says "rate limit" or "not found" | Set `GITHUB_TOKEN`, or check the repo name and that the commit exists in it. |
 | "Who caused it" says it can't tell which commit | The image tag does not end in a commit ID (for example `latest`). Tag the image with the commit ID. |
-| Correlation ID search finds nothing | The ID must appear in the pod's last 2000 log lines, as plain text. |
+| Live logs is empty | The container has not printed anything yet, or Kubernetes no longer holds its logs. |
 | Masked output shows odd `REDACTED` on harmless IDs | The long-token rule also hides pod UIDs and container IDs. Harmless. |
 
 ## Known limits
@@ -319,7 +319,7 @@ Never commit a token. Results are cached for 5 minutes.
 - Masking can miss secrets in formats it doesn't know. The preview is the real check.
 - Prompt injection is reduced (Claude has no tools, output isn't rendered as HTML) but not eliminated. Check any command Claude suggests before running it.
 - The app has no login and no audit log of what was sent to Claude.
-- Correlation ID search reads only the last 2000 lines of each container, and only what Kubernetes still holds. For older history you need a log store such as Loki or Elasticsearch.
+- Live logs show at most the last 100 lines, read from the latest 200 that Kubernetes still holds. For older history you need a log store such as Loki or Elasticsearch.
 - The commit lookup works with GitHub only, and only when the image tag ends in a commit ID.
 - The Business team chat answers a fixed set of simple questions. Anything else gets the default message.
 - The Anthropic API backend has not been exercised live.
@@ -329,7 +329,7 @@ Never commit a token. Results are cached for 5 minutes.
 
 | File | Purpose |
 |---|---|
-| `app.py` | the Streamlit app: role choice, pod list, pod details, correlation ID search, business chat |
+| `app.py` | the Streamlit app: role choice, pod list, pod details, live logs, business chat |
 | `llm.py` | Claude backends, prompts (code issue vs deployment issue), follow-up chat |
 | `masking.py`, `test_masking.py` | secret masking and its tests |
 | `gitinfo.py` | commit lookup via the GitHub API |

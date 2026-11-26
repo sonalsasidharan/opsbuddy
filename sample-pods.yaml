@@ -38,8 +38,8 @@ spec:
         requests: { cpu: 100m, memory: 128Mi }
 ---
 # Code bug: the Python code raises KeyError and the pod crash-loops.
-# The logs carry a correlation ID and the committer (made-up demo values), the way a
-# pipeline step could write them, so you can try "Search by correlation ID".
+# The logs carry an ERROR line and the committer (made-up demo values), the way a
+# pipeline step could write them.
 apiVersion: v1
 kind: Pod
 metadata:

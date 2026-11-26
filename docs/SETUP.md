@@ -54,7 +54,7 @@ After about a minute you should see:
 |---|---|---|
 | `healthy-api-7d9f` | `Running` | a healthy service |
 | `payment-service-5c8b` | `ImagePullBackOff` (or a crash, after step 4) | a database connection error with fake secrets, to test masking |
-| `orders-service-4e2a` | `CrashLoopBackOff` | a Python code bug (`KeyError`), a correlation ID `3f2a9c1d-0003` and a made-up committer line in its logs |
+| `orders-service-4e2a` | `CrashLoopBackOff` | a Python code bug (`KeyError`), an ERROR line and a made-up committer line in its logs |
 | `promo-service-3a1d` | `ImagePullBackOff` | a bad image on purpose |
 
 `orders-service-4e2a` pulls `python:3.12-alpine` from Docker Hub, so the cluster needs internet access.
@@ -109,8 +109,8 @@ For Claude analysis, install Claude Code and log in once (`claude`), as describe
 
 1. On the first page, click **Developers / DevOps**.
 2. Open the `demo-apps` box, then click `orders-service-4e2a`.
-3. You should see, in order: **Error log lines**, **What went wrong** (in plain English), **Who caused it**, **Search by correlation ID**, and **Claude's take**.
-4. In **Search by correlation ID**, paste `3f2a9c1d-0003` and press Search. You should see the `ERROR correlation_id=...` line. Search `3f2a9c1` or `Asha` to find the made-up committer line.
+3. You should see, in order: **Error log lines**, **Live logs**, **What went wrong** (in plain English), **Who caused it**, and **Claude's take**.
+4. In **Live logs**, switch between **All lines** and **Errors only**. You should see the traceback and the made-up committer line `INFO started commit=3f2a9c1 author=Asha Verma`.
 5. Click **⇄ Change role**, then **Business team**. Click one of the four suggested questions.
 
 **Who caused it** only finds a commit if the image tag ends in a commit ID and the repo is in `repos.json`. `orders-service-4e2a` has neither, so its box says it can't tell which commit. `payment-service-5c8b` (tag `7fd1a60`) is mapped to a public demo repo and needs internet access and the registry from step 4.
@@ -170,4 +170,4 @@ docker rm -f kind-registry              # only if you did step 4
 | `payment-service-5c8b` stays `ImagePullBackOff` | Do step 4. |
 | `orders-service-4e2a` stays `ImagePullBackOff` | The cluster can't reach Docker Hub. Check internet access. |
 | **Analyze with Claude** shows an error | Run `claude -p "hi"` in a terminal and fix the login. If `ANTHROPIC_API_KEY` is set to something invalid, unset it. |
-| Correlation ID search finds nothing | The ID must appear as plain text in the pod's last 2000 log lines. |
+| Live logs is empty | The container has not printed anything yet, or Kubernetes no longer holds its logs. |

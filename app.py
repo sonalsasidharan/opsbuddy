@@ -659,54 +659,6 @@ def is_system_namespace(ns: str) -> bool:
     return ns in SYSTEM_NAMESPACES or ns.startswith("kube-")
 
 
-def search_logs_by_id(pods: list, namespace: str, needle: str, per_pod: int = 30) -> tuple[list, int]:
-    """Find log lines containing `needle` (for example a correlation ID) in every pod of the namespace.
-    Reads the last 2000 lines of the current and the previous container. Returns ([(pod, [lines])], pods_searched)."""
-    needle_l = needle.lower()
-    hits = []
-    for p in pods:
-        lines = []
-        for previous in (False, True):
-            try:
-                raw = v1.read_namespaced_pod_log(p["pod_name"], namespace, previous=previous, tail_lines=2000)
-            except Exception:
-                continue
-            for ln in (raw or "").splitlines():
-                if needle_l in ln.lower() and ln not in lines:
-                    lines.append(ln)
-        if lines:
-            hits.append((p, masking.mask_text("\n".join(lines[-per_pod:])).splitlines()))
-    return hits, len(pods)
-
-
-def render_correlation_search(pods: list, namespace: str, key: str = "list"):
-    """pods: every pod in the namespace (main page) or just the open pod (pod details)."""
-    where = f"the pod <b>{esc(pods[0]['pod_name'])}</b>" if len(pods) == 1 else f"every pod in <b>{esc(namespace)}</b>"
-    with st.container(key=f"corrbox-{key}"):
-        st.markdown('<div class="nk-corr-h">Search by correlation ID</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="nk-note" style="margin:-2px 0 8px 0">Looks through the recent logs of {where}. '
-            'Read straight from Kubernetes; nothing is sent to Claude. Secrets are masked.</div>',
-            unsafe_allow_html=True,
-        )
-        with st.form(f"corr-form-{key}", border=False):
-            c1, c2 = st.columns([5, 1])
-            cid = c1.text_input("Correlation ID", placeholder="Paste a correlation ID, for example 3f2a9c1d-...", label_visibility="collapsed")
-            go = c2.form_submit_button("Search", use_container_width=True)
-        if go:
-            cid = cid.strip()
-            if len(cid) < 4:
-                st.warning("Enter at least 4 characters.")
-            else:
-                with st.spinner("Searching logs..."):
-                    hits, searched = search_logs_by_id(pods, namespace, cid)
-                if not hits:
-                    st.info(f"No log lines containing that ID in {searched} pod(s). Only the last 2000 lines of each pod are searched.")
-                for p, lines in hits:
-                    st.markdown(f"**{esc(p['business_name'])}** (`{esc(p['pod_name'])}`): {len(lines)} line(s)")
-                    st.code("\n".join(lines), language="text")
-
-
 COPY_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
              'stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>')
 TICK_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
@@ -746,6 +698,43 @@ def copy_button(text: str) -> None:
     )
 
 
+ERROR_LINE = re.compile(r"ERROR|Exception|Fatal|panic|Traceback|Failed|WARN", re.IGNORECASE)
+
+
+def read_live_logs(pod_name: str, namespace: str, tail: int = 200) -> str:
+    """Latest log lines of the running container, or of the last crashed one while the pod waits to restart."""
+    for previous in (False, True):
+        try:
+            logs = v1.read_namespaced_pod_log(pod_name, namespace, previous=previous, tail_lines=tail)
+        except Exception:
+            continue
+        if logs and not logs.startswith("unable to retrieve container logs"):
+            return logs
+    return ""
+
+
+def render_live_logs(pod: dict, namespace: str) -> None:
+    """All recent log lines (not only errors), refreshed every few seconds. Newest first, so no scrolling is needed."""
+    st.markdown('<div class="nk-h">Live logs</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([2, 3])
+    live = c1.toggle("Live (updates every 3 seconds)", value=True, key=f"live-{pod['pod_name']}")
+    mode = c2.radio("Show", ["All lines", "Errors only"], horizontal=True, key=f"livemode-{pod['pod_name']}",
+                    label_visibility="collapsed")
+
+    def _show() -> None:
+        lines = read_live_logs(pod["pod_name"], namespace).splitlines()
+        if mode == "Errors only":
+            lines = [ln for ln in lines if ERROR_LINE.search(ln)]
+        lines = lines[-100:]
+        if lines:
+            st.code(masking.mask_text("\n".join(reversed(lines))), language="text", height=360 if len(lines) > 14 else "content")
+        else:
+            st.caption("No log lines yet.")
+        st.caption(f"Newest first. The last 100 lines Kubernetes still holds. Secrets are masked. Updated {datetime.now().strftime('%H:%M:%S')}.")
+
+    st.fragment(run_every=3 if live else None)(_show)()
+
+
 def render_pod(pod: dict, namespace: str):
     ok = pod["healthy"]
     st.markdown(
@@ -770,7 +759,7 @@ def render_pod(pod: dict, namespace: str):
             f'{esc(pod["business_name"])} is running normally with {pod["restarts"]} restarts.</div></div>',
             unsafe_allow_html=True,
         )
-        render_correlation_search([pod], namespace, key="pod")
+        render_live_logs(pod, namespace)
         render_claude_box(pod, namespace)
         return
 
@@ -785,6 +774,8 @@ def render_pod(pod: dict, namespace: str):
         with st.expander("Kubernetes warning events"):
             st.markdown("\n".join(ev))
 
+    render_live_logs(pod, namespace)
+
     st.markdown('<div class="nk-h">What went wrong</div>', unsafe_allow_html=True)
     items = "".join(f"<li>{inline(m)}</li>" for m in plain_english_errors(logs, pod["state"]))
     st.markdown(
@@ -794,8 +785,6 @@ def render_pod(pod: dict, namespace: str):
 
     st.markdown('<div class="nk-h">Who caused it</div>', unsafe_allow_html=True)
     st.markdown(commit_card(ci), unsafe_allow_html=True)
-
-    render_correlation_search([pod], namespace, key="pod")
 
     render_claude_box(pod, namespace)
 

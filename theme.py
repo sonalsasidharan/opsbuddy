@@ -123,12 +123,6 @@ h1,h2,h3 {{ font-weight:600; letter-spacing:-0.02em; }}
 .nk-step {{ display:flex; gap:10px; align-items:flex-start; font-size:12.5px; line-height:1.55; color:var(--text2); margin-top:8px; }}
 .nk-step b {{ flex:none; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center;
   font-size:11px; color:var(--champagne); border:1px solid rgba(217,178,106,.5); background:rgba(217,178,106,.1); }}
-/* Correlation ID search box */
-[class*="st-key-corrbox"] {{ --rgb:94,234,212; border-radius:20px !important; padding:14px 16px 12px !important; margin:6px 0 14px;
-  background:radial-gradient(360px 180px at 100% 0%, rgba(var(--rgb),.22), transparent 70%), linear-gradient(160deg, rgba(var(--rgb),.10), rgba(var(--rgb),.02)), var(--s3) !important;
-  border:1px solid rgba(var(--rgb),.6) !important; box-shadow:0 18px 40px -24px rgba(var(--rgb),.5); }}
-.nk-corr-h {{ font-size:18px; font-weight:700; letter-spacing:-0.02em; color:rgb(94,234,212); }}
-[class*="st-key-corrbox"] .stFormSubmitButton > button {{ background:rgb(var(--rgb)) !important; border-color:rgb(var(--rgb)) !important; color:#0B1F1B !important; font-weight:600; }}
 /* Big boundary box around the whole "Pods by namespace" section */
 [class*="st-key-podsection"] {{ border-radius:28px !important; padding:6px 20px 14px !important; margin-top:8px;
   background:radial-gradient(700px 300px at 0% 0%, rgba(167,139,250,.10), transparent 70%), rgba(245,245,247,.02) !important;
@@ -251,7 +245,7 @@ LIGHT_CSS = """
 .nk-sc-l, .nk-howto, .nk-claude-h, .nk-corr-h, .nk-name { color:inherit; }
 .nk-role-t { color:var(--text) !important; } .nk-role-d, .nk-rstep, .nk-step, .nk-sc-row, .nk-note, .nk-k, .nk-meta { color:var(--text2) !important; }
 .nk-rstep > .nk-rolelink, .nk-rstep span { color:var(--text2) !important; }
-.nk-role, .nk-sc, [class*="st-key-nsbox-"], [class*="st-key-corrbox"], [class*="st-key-podsection"], .nk-card, .nk-tile {
+.nk-role, .nk-sc, [class*="st-key-nsbox-"], [class*="st-key-podsection"], .nk-card, .nk-tile {
   background:#FFFFFF !important; box-shadow:0 10px 28px -18px rgba(26,26,29,.35) !important; }
 [class*="st-key-podsection"] { background:rgba(255,255,255,.55) !important; }
 .stButton > button { background:#FFFFFF !important; color:var(--text) !important; border-color:var(--line) !important; }
