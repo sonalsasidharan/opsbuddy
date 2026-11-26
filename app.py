@@ -1,8 +1,10 @@
+import json
 import os
 import re
 from datetime import datetime, timezone
 
 import streamlit as st
+import streamlit.components.v1 as components
 from kubernetes import client, config
 
 import gitinfo
@@ -705,6 +707,45 @@ def render_correlation_search(pods: list, namespace: str, key: str = "list"):
                     st.code("\n".join(lines), language="text")
 
 
+COPY_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+             'stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>')
+TICK_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+             'stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>')
+
+
+def copy_button(text: str) -> None:
+    """A small ChatGPT-style copy icon. One click copies `text` to the clipboard and shows a tick."""
+    payload = json.dumps(text).replace("</", "<\\/")
+    components.html(
+        f"""
+<style>
+  html, body {{ margin:0; background:transparent; }}
+  button {{ width:30px; height:30px; border:0; border-radius:8px; background:transparent; color:#9a9aa2;
+           cursor:pointer; display:flex; align-items:center; justify-content:center; }}
+  button:hover {{ background:rgba(128,128,128,.22); color:#c9c9d1; }}
+  button:focus-visible {{ outline:2px solid #D9B26A; }}
+  svg {{ width:17px; height:17px; }}
+</style>
+<button id="b" type="button" title="Copy" aria-label="Copy">{COPY_ICON}</button>
+<script>
+  const text = {payload};
+  const btn = document.getElementById('b');
+  const copyIcon = btn.innerHTML;
+  btn.addEventListener('click', async () => {{
+    try {{ await navigator.clipboard.writeText(text); }}
+    catch (e) {{
+      const a = document.createElement('textarea'); a.value = text; document.body.appendChild(a);
+      a.select(); document.execCommand('copy'); a.remove();
+    }}
+    btn.innerHTML = '{TICK_ICON}';
+    setTimeout(() => {{ btn.innerHTML = copyIcon; }}, 1600);
+  }});
+</script>
+""",
+        height=34,
+    )
+
+
 def render_pod(pod: dict, namespace: str):
     ok = pod["healthy"]
     st.markdown(
@@ -730,6 +771,7 @@ def render_pod(pod: dict, namespace: str):
             unsafe_allow_html=True,
         )
         render_correlation_search([pod], namespace, key="pod")
+        render_claude_box(pod, namespace)
         return
 
     logs = get_top_errors(pod["pod_name"], namespace, lines=10)
@@ -755,13 +797,76 @@ def render_pod(pod: dict, namespace: str):
 
     render_correlation_search([pod], namespace, key="pod")
 
+    render_claude_box(pod, namespace)
+
+
+def build_business_context(services: list, namespace: str) -> tuple[str, dict]:
+    """Service status only (no logs, no events). Masked like everything else that is sent to Claude."""
+    lines = [f"Namespace: {namespace}", f"Services ({len(services)}):"]
+    for p in services:
+        lines.append(
+            f"- {p['business_name']} (pod {p['pod_name']}): state {p['state']}, restarts {p['restarts']}, "
+            f"running for {p['age']}, {'healthy' if p['healthy'] else 'needs attention'}"
+        )
+    return masking.mask("\n".join(lines))
+
+
+BIZ_TAKE_QUESTION = (
+    "Give a short plain-English summary of the current status. Say what is working, what is not working, "
+    "and what the business should know or do next."
+)
+
+
+def render_business_claude_take(services: list, namespace: str) -> None:
+    """Claude chat for the business team, at the end of the page. General questions on any topic.
+    Only what the user types is sent. Nothing from the cluster is included."""
     with st.container(key="claudebox"):
         st.markdown('<div class="nk-claude-h"><span>✦</span> Claude’s take</div>', unsafe_allow_html=True)
+        if not llm.backend():
+            st.markdown(
+                '<div class="nk-note" style="margin:-4px 0 4px 0">Claude is not available on this machine. '
+                'Install and log in to Claude Code, or set ANTHROPIC_API_KEY.</div>',
+                unsafe_allow_html=True,
+            )
+            return
         st.markdown(
-            '<div class="nk-note" style="margin:-4px 0 10px 0">Sends this pod’s state, the error lines above (secrets masked), '
-            'warning events and the suspect commit’s author and message to Claude. You see exactly what will be sent and approve it first.</div>',
+            '<div class="nk-note" style="margin:-4px 0 10px 0">Ask Claude anything. Only what you type is sent. '
+            'Nothing from your cluster is included.</div>',
             unsafe_allow_html=True,
         )
+        chat = st.session_state.setdefault("claude_chat", [])
+        for m in chat:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+                if m["role"] == "assistant":
+                    copy_button(m["content"])
+        with st.form("biz-claude-form", clear_on_submit=True, border=False):
+            c1, c2 = st.columns([6, 1])
+            typed = c1.text_input("Your question", placeholder="Type your question here", label_visibility="collapsed")
+            sent = c2.form_submit_button("Ask Claude", use_container_width=True)
+        if sent and typed.strip():
+            q = masking.mask_text(typed.strip())  # the same secret masking used everywhere else
+            with st.spinner("Claude is thinking..."):
+                res = llm.general_chat(list(chat), q)
+            if "text" in res:
+                chat.append({"role": "user", "content": q})
+                chat.append({"role": "assistant", "content": res["text"]})
+                st.rerun()
+            else:
+                st.error(res["error"])
+
+
+def render_claude_box(pod: dict, namespace: str) -> None:
+    """Claude's take on a pod, healthy or failing. Nothing is sent until the user approves the preview."""
+    with st.container(key="claudebox"):
+        st.markdown('<div class="nk-claude-h"><span>✦</span> Claude’s take</div>', unsafe_allow_html=True)
+        if pod["healthy"]:
+            note = ("Sends this pod’s state, its recent log lines (secrets masked) and warning events to Claude. "
+                    "You see exactly what will be sent and approve it first.")
+        else:
+            note = ("Sends this pod’s state, the error lines above (secrets masked), warning events and the suspect "
+                    "commit’s author and message to Claude. You see exactly what will be sent and approve it first.")
+        st.markdown(f'<div class="nk-note" style="margin:-4px 0 10px 0">{note}</div>', unsafe_allow_html=True)
         cache_key = ai_key(pod, namespace)
         have = cached_analysis(pod, namespace)
         label = "Analyze again" if have else "Analyze with Claude"
@@ -794,8 +899,7 @@ def render_pod(pod: dict, namespace: str):
                 with st.container(border=True):
                     st.markdown(result["text"])
                     st.caption(f"Written by {result['model']}. Verify before changing production.")
-            with st.expander("Copy this answer as text"):
-                st.code(result["text"], language="markdown")
+                copy_button(result["text"])
                 render_followup(pod, cache_key, result)
 
 
@@ -838,6 +942,8 @@ def render_followup(pod: dict, key: tuple, analysis: dict):
         for m in hist:
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
+                if m["role"] == "assistant":
+                    copy_button(m["content"])
     if error:
         st.error(error)
 
@@ -1027,16 +1133,63 @@ else:
         if col.button(sp, key=f"sp-{sp}", use_container_width=True):
             st.session_state["pending"] = sp
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # Order on the page: chat messages, then the input bar, then Claude's take.
+    # The input bar sits inside a container, so it stays in the page flow (it is not pinned to the window)
+    # and Claude's take can be placed below it.
+    thread = st.container()
+    with thread:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg["role"] == "assistant":
+                    copy_button(msg["content"])
 
-    prompt = st.chat_input("Ask about your services: what is working, what is not, whether anything had a problem") or st.session_state.pop("pending", None)
+    with st.container():
+        prompt = st.chat_input("Ask about your services: what is working, what is not, whether anything had a problem") or st.session_state.pop("pending", None)
+
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
         reply = generate_reply(prompt, services, selected_ns)
         st.session_state.messages.append({"role": "assistant", "content": reply})
-        with st.chat_message("assistant"):
-            st.markdown(reply)
+        with thread:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                st.markdown(reply)
+                copy_button(reply)
+
+    # Questions the app cannot answer itself can go to Claude, after the user sees exactly what is sent.
+    with thread:
+        last = st.session_state.messages[-1]
+        if last["role"] == "assistant" and last["content"] == COMPLEX_REPLY and llm.backend():
+            question = next((m["content"] for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
+            if question:
+                if st.button("Ask Claude about this", key="biz-ask"):
+                    st.session_state["biz_preview"] = True
+                if st.session_state.get("biz_preview"):
+                    ctx, report = build_business_context(services, selected_ns)
+                    q = masking.mask_text(question)
+                    with st.container(border=True):
+                        st.markdown("**This is exactly what will be sent to Claude**")
+                        st.caption("Service names, states and restart counts only. No logs.")
+                        st.code(f"{ctx}\n\nQuestion: {q}", language="text")
+                        a, b = st.columns(2)
+                        go = a.button("Approve and send", key="biz-go", type="primary", use_container_width=True)
+                        cancel = b.button("Cancel", key="biz-cancel", use_container_width=True)
+                    if cancel:
+                        st.session_state.pop("biz_preview", None)
+                        st.rerun()
+                    if go:
+                        st.session_state.pop("biz_preview", None)
+                        with st.spinner("Claude is thinking..."):
+                            res = llm.business_chat(ctx, q)
+                        if "text" in res:
+                            st.session_state.messages.append(
+                                {"role": "assistant", "content": res["text"] + "\n\n*Answered by Claude from the service status above.*"}
+                            )
+                            st.rerun()
+                        else:
+                            st.error(res["error"])
+
+    if services:
+        render_business_claude_take(services, selected_ns)

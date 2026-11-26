@@ -97,6 +97,7 @@ h1,h2,h3 {{ font-weight:600; letter-spacing:-0.02em; }}
 [class*="st-key-claudebox"] .nk-note {{ color:rgba(245,245,247,.75); }}
 [class*="st-key-claudebox"] .stButton > button[kind="primary"] {{ background:rgb(var(--o)) !important; border:1px solid rgb(var(--o)) !important; color:#1A0E0A !important; font-weight:600; }}
 [class*="st-key-claudebox"] .stButton > button[kind="primary"]:hover {{ filter:brightness(1.08); transform:translateY(-1px); }}
+[class*="st-key-claudebox"] .stFormSubmitButton > button {{ background:rgb(var(--o)) !important; border:1px solid rgb(var(--o)) !important; color:#1A0E0A !important; font-weight:600; }}
 [class*="st-key-claudebox"] .stButton > button:not([kind="primary"]) {{ border-color:rgba(var(--o),.45); }}
 [class*="st-key-claudebox"] .stButton > button:not([kind="primary"]):hover {{ border-color:rgb(var(--o)); color:rgb(var(--o)); }}
 /* Left panel */
@@ -201,6 +202,7 @@ h1,h2,h3 {{ font-weight:600; letter-spacing:-0.02em; }}
   font-weight:500; transition:transform .08s var(--ease), border-color .2s var(--ease); }}
 .stButton > button:hover {{ border-color:var(--champagne); color:var(--champagne); }}
 .stButton > button:active {{ transform:scale(.97); }}
+.stButton > button[kind="primary"], .stButton > button[kind="primary"] p {{ color:#1A1205 !important; font-weight:600; }}
 [data-testid="stExpander"] {{ border:1px solid var(--line); border-radius:16px; background:var(--cell); }}
 [data-testid="stSidebar"] .stButton > button {{ text-align:left; justify-content:flex-start; width:100%; }}
 
